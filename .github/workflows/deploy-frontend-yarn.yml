@@ -1,0 +1,86 @@
+name: Deploy frontend to S3
+on:
+  workflow_call:
+    inputs:
+      bucket:
+        description: 'The bucket to deploy to'
+        required: true
+        type: string
+      region:
+        description: 'AWS Region'
+        required: true
+        type: string
+        default: us-east-1
+      role:
+        description: 'Role to be assumed in AWS'
+        required: true
+        type: string
+      build_command:
+        description: 'Build command to run with yarn'
+        required: false
+        default: 'build'
+        type: string
+      account:
+        description: 'AWS account ID'
+        required: true
+        type: string
+      env:
+        description: 'Environment to deploy'
+        required: false
+        default: 'production'
+        type: string
+      env_url:
+        description: 'Environment URL'
+        required: true
+        type: string
+      node_version:
+        description: 'NodeJS Version'
+        required: true
+        type: string
+        default: '16'
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest    
+    steps:
+      - uses: actions/checkout@v3
+      - run: sudo apt-get update && sudo apt-get install -y python2
+      - uses: actions/setup-node@v3
+        with:
+          node-version: ${{ inputs.node_version }}
+      - run: npm install --global yarn && yarn --version
+      - run: yarn && yarn run ${{ inputs.build_command }}
+      - uses: actions/upload-artifact@v3
+        with:
+          name: dist
+          path: dist
+          retention-days: 1
+    concurrency: 
+      group: ${{ github.ref }}
+      cancel-in-progress: true
+  deploy:
+    name: Upload to S3
+    environment:
+      name: ${{ inputs.env }}
+      url: ${{ inputs.env_url }}
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: dist
+          path: ./dist
+      - uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.account }}:role/${{ inputs.role }}
+          role-session-name: ${{ github.actor }}
+          aws-region: ${{ inputs.region }}
+      - name: Upload to S3
+        run: |
+          aws s3 sync --delete . s3://${{ inputs.bucket }}
+        working-directory: dist
